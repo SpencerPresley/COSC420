@@ -1,0 +1,1 @@
+docker run -it --name cosc420-classactivity-1 cosc420-classactivity-1
