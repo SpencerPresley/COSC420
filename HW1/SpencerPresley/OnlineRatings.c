@@ -52,6 +52,14 @@ Sorted ratings:
 #include <time.h>
 #include <mpi.h>
 
+// This is used to format the n with commas when printing to the console
+#include <locale.h>
+
+struct RatingToRank {
+    double average_rating;
+    int rank;
+};
+
 void get_ratings(int *ratings, int n) {
     for (int i = 0; i < n; i++) {
         ratings[i] = (rand() % 5) + 1;
@@ -66,19 +74,19 @@ double get_average_for_ratings(int *ratings, int n) {
     return (double)sum / n;
 }
 
-void merge(double *ratings_averages, int left, int middle, int right) {
+void merge(struct RatingToRank *ratings_to_rank_averages, int left, int middle, int right) {
     int n1 = middle - left + 1;
     int n2 = right - middle;
 
-    double *left_array = (double *)malloc(n1 * sizeof(double));
-    double *right_array = (double *)malloc(n2 * sizeof(double));
+    struct RatingToRank *left_array = (struct RatingToRank *)malloc(n1 * sizeof(struct RatingToRank));
+    struct RatingToRank *right_array = (struct RatingToRank *)malloc(n2 * sizeof(struct RatingToRank));
 
     for (int i = 0; i < n1; i++) {
-        left_array[i] = ratings_averages[left + i];
+        left_array[i] = ratings_to_rank_averages[left + i];
     }
 
     for (int i = 0; i < n2; i++) {
-        right_array[i] = ratings_averages[middle + 1 + i];
+        right_array[i] = ratings_to_rank_averages[middle + 1 + i];
     }
 
     int i = 0;
@@ -87,24 +95,24 @@ void merge(double *ratings_averages, int left, int middle, int right) {
 
     // Sort in descending order
     while (i < n1 && j < n2) {
-        if (left_array[i] >= right_array[j]) {
-            ratings_averages[k] = left_array[i];
+        if (left_array[i].average_rating >= right_array[j].average_rating) {
+            ratings_to_rank_averages[k] = left_array[i];
             i++;
         } else {
-            ratings_averages[k] = right_array[j];
+            ratings_to_rank_averages[k] = right_array[j];
             j++;
         }
         k++;
     }
 
     while (i < n1) {
-        ratings_averages[k] = left_array[i];
+        ratings_to_rank_averages[k] = left_array[i];
         i++;
         k++;
     }
 
     while (j < n2) {
-        ratings_averages[k] = right_array[j];
+        ratings_to_rank_averages[k] = right_array[j];
         j++;
         k++;
     }
@@ -113,17 +121,17 @@ void merge(double *ratings_averages, int left, int middle, int right) {
     free(right_array);
 }
 
-void merge_sort(double *ratings_averages, int left, int right) {
+void merge_sort(struct RatingToRank *ratings_to_rank_averages, int left, int right) {
     if (left < right) {
         int middle = left + (right - left) / 2; // find middle point
-        merge_sort(ratings_averages, left, middle); // recursively sort left half
-        merge_sort(ratings_averages, middle + 1, right); // recursively sort right half
-        merge(ratings_averages, left, middle, right); // merge sorted halves
+        merge_sort(ratings_to_rank_averages, left, middle); // recursively sort left half
+        merge_sort(ratings_to_rank_averages, middle + 1, right); // recursively sort right half
+        merge(ratings_to_rank_averages, left, middle, right); // merge sorted halves
     }
 }
 
-void sort(double *ratings_averages, int m) {
-    return merge_sort(ratings_averages, 0, m - 1);
+void sort(struct RatingToRank *ratings_to_rank_averages, int m) {
+    return merge_sort(ratings_to_rank_averages, 0, m - 1);
 }
 
 int is_argument_error(int argc, char **argv, int rank, int size, int m, int n) {
@@ -169,12 +177,14 @@ int is_argument_error(int argc, char **argv, int rank, int size, int m, int n) {
 }
 
 int main(int argc, char **argv) {
+    setlocale(LC_ALL, "");
+
     int m, n, rank, size;
     MPI_Init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-
+    // Parse command line arguments
     m = atoi(argv[1]);
     n = atoi(argv[2]);
 
@@ -183,64 +193,59 @@ int main(int argc, char **argv) {
     }
 
     if (rank == 0) { // Master process
+        struct RatingToRank *ratings_to_rank_averages = (struct RatingToRank *)malloc(m * sizeof(struct RatingToRank));
         srand(time(NULL));
         int *ratings = (int *)malloc(n * sizeof(int));
-        double *ratings_averages = (double *)malloc(m * sizeof(double));
 
         for (int i = 0; i < m; i++) {
             get_ratings(ratings, n);
-            MPI_Send(
-                ratings, // Buffer which stores the ratings being sent
-                n, // Count of elements to send, each product has n ratings
-                MPI_INT, // Data type of the ratings are integers
-                i + 1, // Rank of destination process
-                0, // Tag of 0 for initial data
-                MPI_COMM_WORLD
-            );
+
+            /* Following print is used to help in verifying the output of the program */
+            // printf("Worker %d's first 10 ratings for product %d are: ", rank, i+1);
+            // for (int j = 0; j < 10; j++) {  // Print first 10 ratings
+            //     printf("%d ", ratings[j]);
+            // }
+            // printf("\n");
+
+            MPI_Send(ratings, n, MPI_INT, i + 1, 0, MPI_COMM_WORLD);
         }
 
         for (int i = 0; i < m; i++) {
-            MPI_Recv(
-                &ratings_averages[i], // Buffer to store the received average rating
-                1, // Count of elements to receive 
-                MPI_DOUBLE, // Datatype of the average rating
-                i + 1, // Source process
-                1, // Tag of 1 for rating averages
-                MPI_COMM_WORLD,
-                MPI_STATUS_IGNORE
-            );
+            MPI_Recv(&ratings_to_rank_averages[i], 2, MPI_DOUBLE, i + 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         }
 
-        sort(ratings_averages, m);
+        /* Following print is used to help in verifying the output of the program by being able to see what the average ratings are before they are sorted to ensure that the sorting algorithm is working correctly */
+        // printf("Unsorted ratings:\n");
+        // for (int i = 0; i < m; i++) {
+        //     printf("%d: %.1f\n", ratings_to_rank_averages[i].rank, ratings_to_rank_averages[i].average_rating);
+        // }
+        // printf("\n");
 
-        printf("Sorted ratings:\n");
+        sort(ratings_to_rank_averages, m);
+
+        printf("\nSorted Product Ratings:\n\n");
         for (int i = 0; i < m; i++) {
-            printf("%d: %.1f\n", i + 1, ratings_averages[i]);
+            printf("╔══════════════════════════════════════╗\n");
+            printf("║           Product Rating %d           ║\n", i + 1);
+            printf("╠══════════════════════════════════════╣\n");
+            printf("║ Worker:         %-20d ║\n", ratings_to_rank_averages[i].rank);
+            printf("║ Product:        %-20d ║\n", ratings_to_rank_averages[i].rank);
+            printf("║ Average Rating: %-20.4f ║\n", ratings_to_rank_averages[i].average_rating);
+            printf("║ Ratings:        %-'20d ║\n", n);
+            printf("╚══════════════════════════════════════╝\n\n");
         }
 
         free(ratings);
-        free(ratings_averages);
-    } else { // Worker processes
+        free(ratings_to_rank_averages);
+    } else if (rank <= m) { // Worker processes
         int *ratings = (int *)malloc(n * sizeof(int));
-        MPI_Recv(
-            ratings, // Buffer to store the received ratings
-            n, // Count of elements to receive, each product has n ratings
-            MPI_INT, // Datatype of the ratings are integers
-            0, // Rank of the sender (master process)
-            0, // Tag of 0 for inital data
-            MPI_COMM_WORLD,
-            MPI_STATUS_IGNORE
-        );
+        MPI_Recv(ratings, n, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
         double average = get_average_for_ratings(ratings, n);
-        MPI_Send(
-            &average, // Buffer to store the average rating
-            1, // Count of elements to send
-            MPI_DOUBLE, // Datatype of the average rating
-            0, // Rank of the destination process
-            1, // Tag of 1 for rating average
-            MPI_COMM_WORLD
-        );
+
+        struct RatingToRank result = {average, rank};
+        MPI_Send(&result, 2, MPI_DOUBLE, 0, 1, MPI_COMM_WORLD);
+
         free(ratings);
     }
 
